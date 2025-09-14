@@ -96,6 +96,7 @@ app.post('/api/generate', generateLimiter, upload.single('image'), async (req, r
       });
     }
 
+
     // Call Gemini image editing
     const result = await generateWithGemini({
       name,
@@ -113,6 +114,13 @@ app.post('/api/generate', generateLimiter, upload.single('image'), async (req, r
     });
   } catch (err) {
     console.error('Generation error:', err);
+    // Distinguish timeout and surface a clearer 504
+    if (err?.name === 'TimeoutError' || err?.code === 'ETIMEDOUT') {
+      const timeoutMs = parseInt(process.env.GEMINI_TIMEOUT_MS || '90000', 10);
+      return res.status(504).json({
+        error: `Generation timed out after ${timeoutMs}ms`,
+      });
+    }
     const message = err?.message || 'Unexpected error';
     res.status(500).json({ error: message });
   }
@@ -129,10 +137,12 @@ async function generateWithGemini({ name, buffer, mimeType }) {
   const apiKey = process.env.GOOGLE_API_KEY;
   const genAI = new GoogleGenerativeAI(apiKey);
 
-  // Model name per requirement. If this preview model is unavailable, consider
-  // using a compatible image-capable model instead.
-  const modelName = process.env.GEMINI_MODEL || 'gemini-2.5-flash-image-preview';
-  const model = genAI.getGenerativeModel({ model: modelName });
+  // Model fallback order - try the higher quota model first
+  const fallbackModels = [
+    process.env.GEMINI_MODEL || 'gemini-2.5-pro-preview-03-25',
+    'gemini-2.5-pro-preview-03-25',
+    'gemini-2.5-flash-image-preview'
+  ];
 
   const prompt =
     `Take this photo and turn the person into a collectible figurine inside a toy box. ` +
@@ -147,8 +157,6 @@ async function generateWithGemini({ name, buffer, mimeType }) {
     },
   };
 
-  // Newer SDKs support generationConfig.responseMimeType for image output.
-  // We attempt that path and fall back to scanning parts for inlineData.
   const request = {
     contents: [
       {
@@ -159,44 +167,76 @@ async function generateWithGemini({ name, buffer, mimeType }) {
         ],
       },
     ],
-    // Do not set responseMimeType; this endpoint only allows text mimetypes.
-    // Some image-capable preview models return image data via parts.inlineData or parts.media.
   };
 
-  // Timeout wrapper around model call
-  const timeoutMs = parseInt(process.env.GEMINI_TIMEOUT_MS || '30000', 10);
-  const response = await withTimeout(
-    model.generateContent(request),
-    timeoutMs,
-    'Gemini generateContent'
-  );
+  // Try each model in fallback order
+  for (const modelName of [...new Set(fallbackModels)]) { // Remove duplicates
+    try {
+      console.log(`Trying model: ${modelName}`);
+      const model = genAI.getGenerativeModel({ model: modelName });
 
-  // Try to extract inlineData image from candidates
-  const candidates = response?.response?.candidates || [];
-  for (const c of candidates) {
-    const parts = c?.content?.parts || [];
-    for (const p of parts) {
-      if (p.inlineData?.data) {
-        return { imageBase64: p.inlineData.data, mimeType: p.inlineData.mimeType || 'image/png' };
+      const timeoutMs = parseInt(process.env.GEMINI_TIMEOUT_MS || '90000', 10);
+      const response = await withTimeout(
+        model.generateContent(request),
+        timeoutMs,
+        `Gemini generateContent with ${modelName}`
+      );
+
+      // Try to extract inlineData image from candidates
+      const candidates = response?.response?.candidates || [];
+
+      for (const c of candidates) {
+        const parts = c?.content?.parts || [];
+
+        for (const p of parts) {
+          if (p.inlineData?.data) {
+            console.log(`✅ Success with model: ${modelName}`);
+            return { imageBase64: p.inlineData.data, mimeType: p.inlineData.mimeType || 'image/png' };
+          }
+          // Some responses may return a "media" style payload; handle if present.
+          if (p.media?.mimeType && p.media?.data) {
+            console.log(`✅ Success with model: ${modelName}`);
+            return { imageBase64: p.media.data, mimeType: p.media.mimeType };
+          }
+          // Log if we get text instead of images
+          if (p.text) {
+            console.log(`⚠️  ${modelName} returned text instead of image: "${p.text.substring(0, 100)}..."`);
+          }
+        }
       }
-      // Some responses may return a "media" style payload; handle if present.
-      if (p.media?.mimeType && p.media?.data) {
-        return { imageBase64: p.media.data, mimeType: p.media.mimeType };
+
+      // If no image data found, try next model
+      console.log(`❌ No image data returned from model: ${modelName}, trying next...`);
+
+    } catch (error) {
+      console.log(`Model ${modelName} failed:`, error.message);
+      // Continue to next model in fallback chain
+      if (error.status === 500 || error.message.includes('Internal error')) {
+        continue; // Try next model
       }
+      // For other errors (auth, quota, etc.), don't continue
+      throw error;
     }
   }
 
-  // As a last resort, if the SDK only returned a URL (less common), you could fetch it.
-  // For this scaffold, we surface an error if no inline image appears.
+  // If all models failed to return image data
   return null;
 }
 
 // Utility: Promise timeout wrapper
+class TimeoutError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'TimeoutError';
+    this.code = 'ETIMEDOUT';
+  }
+}
+
 function withTimeout(promise, ms, label = 'operation') {
   let timeoutId;
   const t = new Promise((_, reject) => {
     timeoutId = setTimeout(() => {
-      reject(new Error(`${label} timed out after ${ms}ms`));
+      reject(new TimeoutError(`${label} timed out after ${ms}ms`));
     }, ms);
   });
   return Promise.race([promise, t]).finally(() => clearTimeout(timeoutId));

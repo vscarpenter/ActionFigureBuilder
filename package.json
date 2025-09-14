@@ -1,11 +1,17 @@
 {
   "name": "action-figure-builder",
   "version": "0.1.0",
+  "description": "Transform user photos into stylized action figure images using Google's Gemini AI",
   "private": true,
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "demo": "node demo.js",
+    "build": "echo 'No build step required for this project'",
+    "health": "curl -f http://localhost:3000/api/health || echo 'Server is not running'",
+    "test-api": "./test-api.sh",
+    "quick-demo": "npm run dev"
   },
   "engines": {
     "node": ">=18.18.0"

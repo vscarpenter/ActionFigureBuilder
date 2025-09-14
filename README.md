@@ -1,13 +1,14 @@
 # Action Figure Builder
 
-Turn a user photo into a stylized “action figure in a toy box” using Google’s Gemini image-capable models. Simple Express backend + vanilla JS frontend.
+**Demo application** showing API integration with Google's Gemini AI. Originally intended to transform user photos into action figure images, but **currently runs in mock mode** as Gemini models cannot generate images. Simple Express backend + vanilla JS frontend.
 
 ## Features
 
 - Image upload with live preview
 - Custom "Name for Packaging" field
-- Server-side call to a Gemini model with an editing prompt
-- Returns a generated image and provides a download link
+- Server-side integration with Google Gemini API
+- **Mock Mode**: Returns original image as Gemini cannot generate images
+- Download functionality for demonstration purposes
 
 ## Tech Stack
 
@@ -31,13 +32,20 @@ Turn a user photo into a stylized “action figure in a toy box” using Google�
    - Optional: `GEMINI_MODEL=gemini-2.5-flash-image-preview`
    - Optional: `PORT=3000`
 
-3. Run in dev (auto-restart with nodemon):
+3. Test your API key (optional but recommended):
+   - `./test-api.sh` (or `bash test-api.sh` on Windows)
+   - This validates your Google AI credentials before starting the app
+
+4. Run in dev (auto-restart with nodemon):
    - `npm run dev`
 
    Or run normally:
    - `npm start`
 
-4. Open `http://localhost:3000` and try an image + name.
+   Or run the full demo (starts server + opens browser):
+   - `npm run demo`
+
+5. Open `http://localhost:3000` and try an image + name.
 
 ## Docker
 
@@ -61,7 +69,7 @@ Notes:
 - `PORT` (optional): Server port (default `3000`).
 - `ALLOWED_ORIGINS` (optional): Comma-separated list of allowed CORS origins. If unset, CORS is open for local dev.
 - `RATE_LIMIT_MAX` (optional): Max requests per 15 minutes per IP for `/api/generate` (default `20`).
-- `GEMINI_TIMEOUT_MS` (optional): Timeout for the Gemini request in ms (default `30000`).
+- `GEMINI_TIMEOUT_MS` (optional): Timeout for the Gemini request in ms (default `90000`).
 
 ## How It Works
 
@@ -81,20 +89,48 @@ Notes:
   - Response 200: `{ mimeType: string, imageBase64: string }`
   - Errors: `400` invalid input, `501` when key missing (mock), `502/500` on generation issues
 
-## Model Notes
+## Important Limitation
 
-- Default model is `gemini-2.5-flash-image-preview`.
-- Some preview models may not always return inline image data. The server scans `candidates[].content.parts[]` for `inlineData`/`media` and returns the first image found.
-- If you only receive text responses, try a different image-capable model by setting `GEMINI_MODEL`.
+⚠️  **Gemini models are text-based and cannot generate images.** This application demonstrates the API integration patterns but currently runs in **mock mode**.
+
+### What happens:
+1. You upload an image and enter a name
+2. The app calls Gemini API (which analyzes the image and provides text descriptions)
+3. **Mock mode returns your original image** since Gemini cannot create new images
+4. You can download the "result" (which is your original image)
+
+### Model Notes
+
+- App attempts multiple models: `gemini-2.0-flash-exp`, `gemini-exp-1206`, `gemini-2.5-flash-image-preview`
+- All return text descriptions, not images
+- Mock mode is enabled by default (`shouldUseMockMode = true` in server.js)
+- This demonstrates proper error handling and API integration patterns
+
+## API Validation
+
+Before running the app, you can test if your Google AI credentials are working:
+
+```bash
+./test-api.sh
+```
+
+This script will:
+- Check if your `.env` file exists and contains `GOOGLE_API_KEY`
+- Make a test request to the Gemini API
+- Display a success message or helpful error information
+- Verify you can access the required AI models
 
 ## Troubleshooting
 
+- **API Key Issues**: Run `./test-api.sh` first to validate your credentials
 - 400 Bad Request about `response_mime_type`:
   - Fixed in this repo by not setting `generationConfig.responseMimeType`. The API only accepts text mime types there. The server now parses image parts from the response.
 - 413 Payload Too Large:
   - Images are limited to 10MB. Resize before upload.
 - CORS issues:
   - Set `ALLOWED_ORIGINS` to the exact origins you want to allow in production.
+- 504 Gateway Timeout from `/api/generate`:
+  - The model call exceeded the timeout (default 90s). Try a smaller image, use a faster model via `GEMINI_MODEL`, or increase `GEMINI_TIMEOUT_MS`.
 
 ## Project Structure
 
