@@ -1,6 +1,6 @@
 # Action Figure Builder
 
-**Demo application** showing API integration with Google's Gemini AI. Originally intended to transform user photos into action figure images, but **currently runs in mock mode** as Gemini models cannot generate images. Simple Express backend + vanilla JS frontend.
+**Demo application** showing API integration with Google's Gemini AI. Originally intended to transform user photos into action figure images. Simple Express backend + vanilla JS frontend.
 
 ## Features
 
