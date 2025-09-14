@@ -89,22 +89,13 @@ Notes:
   - Response 200: `{ mimeType: string, imageBase64: string }`
   - Errors: `400` invalid input, `501` when key missing (mock), `502/500` on generation issues
 
-## Important Limitation
+## Model Notes
 
-⚠️  **Gemini models are text-based and cannot generate images.** This application demonstrates the API integration patterns but currently runs in **mock mode**.
-
-### What happens:
-1. You upload an image and enter a name
-2. The app calls Gemini API (which analyzes the image and provides text descriptions)
-3. **Mock mode returns your original image** since Gemini cannot create new images
-4. You can download the "result" (which is your original image)
-
-### Model Notes
-
-- App attempts multiple models: `gemini-2.0-flash-exp`, `gemini-exp-1206`, `gemini-2.5-flash-image-preview`
-- All return text descriptions, not images
-- Mock mode is enabled by default (`shouldUseMockMode = true` in server.js)
-- This demonstrates proper error handling and API integration patterns
+- Default model is `gemini-2.5-pro-preview-03-25` (higher quota limits).
+- The server includes automatic fallback logic that tries multiple models in order.
+- If one model returns a 500 error, it automatically tries the next one.
+- The server scans `candidates[].content.parts[]` for `inlineData`/`media` and returns the first image found.
+- Preview models can be unstable - the app will fallback to more stable alternatives.
 
 ## API Validation
 
