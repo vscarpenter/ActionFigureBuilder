@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Action Figure Builder</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <h1>Action Figure Builder</h1>
+
+      <section class="uploader">
+        <div class="image-picker">
+          <label for="imageInput" class="image-drop">
+            <input id="imageInput" type="file" accept="image/*" hidden />
+            <div id="placeholder" class="placeholder">
+              <span>Click to select a photo</span>
+            </div>
+            <img id="preview" alt="Preview" class="preview hidden" />
+          </label>
+        </div>
+
+        <div class="form-row">
+          <label for="nameInput">Name for Packaging</label>
+          <input id="nameInput" type="text" placeholder="e.g., Alex" maxlength="40" />
+        </div>
+
+        <button id="generateBtn" disabled>Generate My Action Figure</button>
+        <div id="status" class="status"></div>
+      </section>
+
+      <section id="resultSection" class="result hidden">
+        <h2>Your Action Figure</h2>
+        <img id="resultImg" alt="Generated Action Figure" />
+        <div class="actions">
+          <a id="downloadBtn" class="button" download="action-figure.png">Download Image</a>
+        </div>
+      </section>
+    </main>
+
+    <script src="/script.js"></script>
+  </body>
+  </html>
+

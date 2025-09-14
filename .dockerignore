@@ -1,0 +1,34 @@
+# Ignore node modules from host
+node_modules
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Logs
+logs
+*.log
+pnpm-debug.log*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build output / caches
+dist
+build
+.cache
+.parcel-cache
+.turbo
+.eslintcache
+.nyc_output
+coverage
+tmp
+.tmp
+
+# VCS / editor
+.git
+.gitignore
+.DS_Store
+.idea
+.vscode
