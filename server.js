@@ -4,16 +4,35 @@ import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
+import crypto from 'crypto';
 
 dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Security headers
+// Security headers with CSP
 app.use(
   helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'"], // unsafe-inline needed for demo UI
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", "data:", "blob:"],
+        connectSrc: ["'self'"],
+        fontSrc: ["'self'"],
+        objectSrc: ["'none'"],
+        mediaSrc: ["'self'"],
+        frameSrc: ["'none'"],
+      },
+    },
     crossOriginResourcePolicy: { policy: 'cross-origin' },
+    hsts: {
+      maxAge: 31536000,
+      includeSubDomains: true,
+      preload: true
+    }
   })
 );
 
@@ -23,14 +42,26 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
   .map((s) => s.trim())
   .filter(Boolean);
 
+// Validate origin format
+const validateOrigin = (origin) => {
+  if (!origin) return true; // Allow non-browser tools
+  try {
+    const url = new URL(origin);
+    return allowedOrigins.includes(url.origin);
+  } catch {
+    return false;
+  }
+};
+
 if (allowedOrigins.length > 0) {
   app.use(
     cors({
       origin: (origin, cb) => {
-        if (!origin) return cb(null, true); // allow non-browser tools
-        return allowedOrigins.includes(origin)
-          ? cb(null, true)
-          : cb(new Error('Not allowed by CORS'));
+        if (validateOrigin(origin)) {
+          cb(null, true);
+        } else {
+          cb(new Error('Not allowed by CORS'));
+        }
       },
     })
   );
@@ -38,6 +69,48 @@ if (allowedOrigins.length > 0) {
   // Open for local dev
   app.use(cors());
 }
+
+// Request ID middleware for tracking
+app.use((req, res, next) => {
+  req.id = req.headers['x-request-id'] || crypto.randomUUID();
+  res.setHeader('X-Request-ID', req.id);
+  next();
+});
+
+// Structured logging helper
+const logger = {
+  info: (reqId, message, meta = {}) => {
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(JSON.stringify({ 
+        timestamp: new Date().toISOString(),
+        level: 'info',
+        requestId: reqId,
+        message,
+        ...meta 
+      }));
+    }
+  },
+  error: (reqId, message, error, meta = {}) => {
+    console.error(JSON.stringify({ 
+      timestamp: new Date().toISOString(),
+      level: 'error',
+      requestId: reqId,
+      message,
+      error: error?.message || error,
+      stack: process.env.NODE_ENV !== 'production' ? error?.stack : undefined,
+      ...meta 
+    }));
+  },
+  warn: (reqId, message, meta = {}) => {
+    console.warn(JSON.stringify({ 
+      timestamp: new Date().toISOString(),
+      level: 'warn',
+      requestId: reqId,
+      message,
+      ...meta 
+    }));
+  }
+};
 
 // Serve static frontend
 app.use(express.static('public'));
@@ -86,10 +159,11 @@ app.post('/api/generate', generateLimiter, upload.single('image'), async (req, r
       return res.status(400).json({ error: 'Name must be 1-40 characters and use letters, numbers, spaces, or . , \' -' });
     }
 
-    // If no API key, return the original image as a mock so UI flow can be tested.
+    // If no API key, return mock mode indicator without exposing configuration details
     if (!process.env.GOOGLE_API_KEY) {
-      return res.status(501).json({
-        error: 'GOOGLE_API_KEY not set. Returning original image as mock.',
+      logger.warn(req.id, 'API key not configured, returning mock response');
+      return res.status(503).json({
+        error: 'Service in demo mode',
         mock: true,
         mimeType: image.mimetype,
         imageBase64: image.buffer.toString('base64'),
@@ -97,11 +171,17 @@ app.post('/api/generate', generateLimiter, upload.single('image'), async (req, r
     }
 
 
-    // Call Gemini image editing
+    // Call Gemini image editing with memory limit check
+    const imageSizeMB = image.buffer.length / (1024 * 1024);
+    if (imageSizeMB > 8) {
+      logger.warn(req.id, 'Large image upload', { sizeMB: imageSizeMB });
+    }
+    
     const result = await generateWithGemini({
       name,
       buffer: image.buffer,
       mimeType: image.mimetype,
+      requestId: req.id,
     });
 
     if (!result || !result.imageBase64) {
@@ -113,27 +193,33 @@ app.post('/api/generate', generateLimiter, upload.single('image'), async (req, r
       imageBase64: result.imageBase64,
     });
   } catch (err) {
-    console.error('Generation error:', err);
+    logger.error(req.id, 'Generation error', err);
+    
     // Distinguish timeout and surface a clearer 504
     if (err?.name === 'TimeoutError' || err?.code === 'ETIMEDOUT') {
       const timeoutMs = parseInt(process.env.GEMINI_TIMEOUT_MS || '90000', 10);
       return res.status(504).json({
-        error: `Generation timed out after ${timeoutMs}ms`,
+        error: `Request timed out, please try again`,
       });
     }
-    const message = err?.message || 'Unexpected error';
-    res.status(500).json({ error: message });
+    
+    // Sanitize error messages before sending to client
+    const sanitizedMessage = process.env.NODE_ENV === 'production' 
+      ? 'An error occurred processing your request'
+      : err?.message || 'Unexpected error';
+    
+    res.status(500).json({ error: sanitizedMessage });
   }
 });
 
 app.listen(port, () => {
-  console.log(`Server running on http://localhost:${port}`);
+  logger.info('server', `Server running on http://localhost:${port}`);
 });
 
 // --- Gemini integration ---
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
-async function generateWithGemini({ name, buffer, mimeType }) {
+async function generateWithGemini({ name, buffer, mimeType, requestId }) {
   const apiKey = process.env.GOOGLE_API_KEY;
   const genAI = new GoogleGenerativeAI(apiKey);
 
@@ -172,7 +258,7 @@ async function generateWithGemini({ name, buffer, mimeType }) {
   // Try each model in fallback order
   for (const modelName of [...new Set(fallbackModels)]) { // Remove duplicates
     try {
-      console.log(`Trying model: ${modelName}`);
+      logger.info(requestId, `Trying model: ${modelName}`);
       const model = genAI.getGenerativeModel({ model: modelName });
 
       const timeoutMs = parseInt(process.env.GEMINI_TIMEOUT_MS || '90000', 10);
@@ -190,26 +276,28 @@ async function generateWithGemini({ name, buffer, mimeType }) {
 
         for (const p of parts) {
           if (p.inlineData?.data) {
-            console.log(`✅ Success with model: ${modelName}`);
+            logger.info(requestId, `Success with model: ${modelName}`);
             return { imageBase64: p.inlineData.data, mimeType: p.inlineData.mimeType || 'image/png' };
           }
           // Some responses may return a "media" style payload; handle if present.
           if (p.media?.mimeType && p.media?.data) {
-            console.log(`✅ Success with model: ${modelName}`);
+            logger.info(requestId, `Success with model: ${modelName}`);
             return { imageBase64: p.media.data, mimeType: p.media.mimeType };
           }
           // Log if we get text instead of images
           if (p.text) {
-            console.log(`⚠️  ${modelName} returned text instead of image: "${p.text.substring(0, 100)}..."`);
+            logger.warn(requestId, `${modelName} returned text instead of image`, { 
+              textPreview: p.text.substring(0, 100) 
+            });
           }
         }
       }
 
       // If no image data found, try next model
-      console.log(`❌ No image data returned from model: ${modelName}, trying next...`);
+      logger.warn(requestId, `No image data returned from model: ${modelName}, trying next...`);
 
     } catch (error) {
-      console.log(`Model ${modelName} failed:`, error.message);
+      logger.error(requestId, `Model ${modelName} failed`, error);
       // Continue to next model in fallback chain
       if (error.status === 500 || error.message.includes('Internal error')) {
         continue; // Try next model
